@@ -159,6 +159,14 @@ def test_a_field_name_that_is_not_an_identifier_goes_between_backticks():
     assert "c_ip: `c-ip`" in program
 
 
+def test_dots_can_be_one_flat_key():
+    w = where(
+        rule("    sel:\n        id.orig_h: 10.0.0.5\n    condition: sel", "product: zeek\n    service: conn"),
+        dots="flat",
+    )
+    assert w == "lower(`id.orig_h`) == '10.0.0.5'"
+
+
 def test_dots_read_nested_objects():
     assert where(rule("    sel:\n        process.parent.name: cmd.exe\n    condition: sel")) == (
         "lower(process.parent.name) == 'cmd.exe'"

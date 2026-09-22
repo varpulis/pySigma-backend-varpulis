@@ -146,6 +146,7 @@ service or category in CamelCase (`WindowsSecurity`, `LinuxProcessCreation`,
 |---|---|---|
 | `-O event_type=X` | from the log source | read every rule from event type `X` |
 | `-O keyword_field=F` | none | the field that holds the log line, where keywords are searched |
+| `-O dots=flat` | `nested` | read `id.orig_h` as one flat key instead of a path into nested objects |
 | `-O subject_prefix=P` (`-f vejas`) | `logs` | event type `T` is read from the subject `P.T` |
 | `-O alert_subject=S` (`-f vejas`) | `alerts.sigma` | where alerts are published |
 
@@ -159,8 +160,8 @@ service or category in CamelCase (`WindowsSecurity`, `LinuxProcessCreation`,
   back-references. The conversion refuses such a rule and says which construct
   it met, rather than emitting a pattern that would never compile.
 - **A dotted field name is a path**: `process.parent.name` reads nested
-  objects. If your events carry flat keys with dots in them (Zeek's
-  `id.orig_h`), rename the fields with a processing pipeline.
+  objects. If your events carry flat keys with dots in them (Zeek's JSON
+  writes `id.orig_h` that way), pass `-O dots=flat`.
 - **`temporal` over four rules or more**, which would take 24 orders and more.
   Write it as `temporal_ordered` when the order is known.
 - **`value_percentile`, `value_median`**, timestamp-part modifiers.

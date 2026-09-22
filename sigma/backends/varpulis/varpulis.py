@@ -284,7 +284,19 @@ class VarpulisBackend(TextQueryBackend):
     # --- fields ------------------------------------------------------------
 
     def escape_and_quote_field(self, field_name: str) -> str:
-        return vpl_field(field_name)
+        return self._field(field_name)
+
+    def _field(self, name: str) -> str:
+        """`vpl_field`, except that with `-O dots=flat` a dotted name is one
+        flat key (Zeek's JSON writes `id.orig_h` that way), read whole
+        between backticks."""
+        if str(self.backend_options.get("dots", "nested")) == "flat" and "." in name:
+            if "`" in name or "\n" in name:
+                raise SigmaFeatureNotSupportedByBackendError(
+                    f"field '{name}' cannot be written in VPL: rename it with a processing pipeline"
+                )
+            return f"`{name}`"
+        return vpl_field(name)
 
     # --- string values -----------------------------------------------------
 
@@ -378,7 +390,7 @@ class VarpulisBackend(TextQueryBackend):
                 "fields to search; name the field that holds the log line with "
                 "-O keyword_field=message"
             )
-        return vpl_field(str(name))
+        return self._field(str(name))
 
     def convert_condition_val_str(self, cond: Any, state: ConversionState) -> str:
         # A keyword matches anywhere in the line, as Sigma specifies.
@@ -392,7 +404,7 @@ class VarpulisBackend(TextQueryBackend):
         field_name = self._keyword_field()
         return self.convert_condition_field_eq_val_re(
             ConditionFieldEqualsValueExpression(field_name, cond.value), state
-        ).replace(f"regex_match({vpl_field(field_name)},", f"regex_match({field_name},", 1)
+        ).replace(f"regex_match({self._field(field_name)},", f"regex_match({field_name},", 1)
 
     # --- one rule ----------------------------------------------------------
 
@@ -528,7 +540,7 @@ class VarpulisBackend(TextQueryBackend):
         for (ref, step), alias in zip(order, aliases):
             wanted = CONTEXT_FIELDS.get(step.event_type, []) + step.fields
             for f in list(dict.fromkeys(wanted))[:8]:
-                emit.append(f"{step.name}_{vpl_key(f)}: {alias}.{vpl_field(f)}")
+                emit.append(f"{step.name}_{vpl_key(f)}: {alias}.{self._field(f)}")
         lines.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
         return "\n".join(lines)
 
@@ -628,7 +640,7 @@ class VarpulisBackend(TextQueryBackend):
         body = [f"stream {rule.name} = {source}", f"    .where({rule.where})"]
         if rule.output:
             emit = self._meta(rule) + list(
-                dict.fromkeys(f"{vpl_key(f)}: {vpl_field(f)}" for f in rule.fields)
+                dict.fromkeys(f"{vpl_key(f)}: {self._field(f)}" for f in rule.fields)
             )
             body.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
             if alert_to:
