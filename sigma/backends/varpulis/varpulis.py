@@ -98,10 +98,11 @@ CONTEXT_FIELDS: dict[str, list[str]] = {
     "SysmonDnsQuery": ["Computer", "Hostname", "Image", "QueryName"],
     "SysmonPipeCreated": ["Computer", "Hostname", "Image", "PipeName"],
     "WindowsSecurity": ["Computer", "EventID", "SubjectUserName", "TargetUserName", "IpAddress", "WorkstationName", "LogonType"],
+    "Proxy": ["c-ip", "cs-username", "cs-method", "cs-host", "c-uri", "sc-status", "c-useragent"],
+    "Webserver": ["c-ip", "cs-method", "cs-uri-stem", "cs-uri-query", "sc-status", "cs-user-agent"],
 }
 
 VPL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-VPL_FIELD_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
 def camel(*words: str | None) -> str:
@@ -135,6 +136,30 @@ def event_type_for(rule: SigmaRule | None) -> str:
 def vpl_str(text: str) -> str:
     """A raw single-quoted VPL string: nothing escapes, `''` is one quote."""
     return "'" + text.replace("'", "''") + "'"
+
+
+def vpl_field(name: str) -> str:
+    """How an expression reads a field: dots read nested objects, and a part
+    that is not an identifier (`cs-uri-query`, W3C web and proxy logs) goes
+    between backticks."""
+    parts = []
+    for part in name.split("."):
+        if VPL_IDENTIFIER.match(part):
+            parts.append(part)
+        elif part and "`" not in part and "\n" not in part:
+            parts.append(f"`{part}`")
+        else:
+            raise SigmaFeatureNotSupportedByBackendError(
+                f"field '{name}' cannot be written in VPL: rename it with a processing pipeline"
+            )
+    return ".".join(parts)
+
+
+def vpl_key(name: str) -> str:
+    """A name the program gives (an emitted field, an aggregate): an
+    identifier, so `cs-uri-query` becomes `cs_uri_query`."""
+    key = re.sub(r"[^A-Za-z0-9_]", "_", name)
+    return key if re.match(r"[A-Za-z_]", key) else "_" + key
 
 
 # Characters with a meaning in Rust regex syntax. Rust accepts a backslash
@@ -239,6 +264,9 @@ class VarpulisBackend(TextQueryBackend):
         CompareOperators.GTE: ">=",
     }
     field_equals_field_expression: ClassVar[str] = "{field1} == {field2}"
+    field_equals_field_startswith_expression: ClassVar[str] = "starts_with({field1}, {field2})"
+    field_equals_field_endswith_expression: ClassVar[str] = "ends_with({field1}, {field2})"
+    field_equals_field_contains_expression: ClassVar[str] = "contains({field1}, {field2})"
     field_equals_field_escaping_quoting: tuple[bool, bool] = (True, True)
 
     # No `in` operator: pySigma expands a list into `or`.
@@ -256,12 +284,7 @@ class VarpulisBackend(TextQueryBackend):
     # --- fields ------------------------------------------------------------
 
     def escape_and_quote_field(self, field_name: str) -> str:
-        if not VPL_FIELD_PATH.match(field_name):
-            raise SigmaFeatureNotSupportedByBackendError(
-                f"field '{field_name}' is not a VPL field name (letters, digits, underscores, "
-                "dots for nested objects): rename it with a processing pipeline"
-            )
-        return field_name
+        return vpl_field(field_name)
 
     # --- string values -----------------------------------------------------
 
@@ -269,7 +292,12 @@ class VarpulisBackend(TextQueryBackend):
         subject = field_name if cased else f"lower({field_name})"
         if not cased:
             value = value.lower()
-        parts = list(value.iter_parts())
+        parts = []
+        for part in value.iter_parts():
+            # `**` matches what `*` matches: collapse, so the shape stays simple.
+            if part == SpecialChars.WILDCARD_MULTI and parts and parts[-1] == SpecialChars.WILDCARD_MULTI:
+                continue
+            parts.append(part)
         texts = [p for p in parts if isinstance(p, str)]
         specials = [p for p in parts if not isinstance(p, str)]
 
@@ -342,15 +370,29 @@ class VarpulisBackend(TextQueryBackend):
             value=value.number,
         )
 
-    def _no_keywords(self, *_: Any) -> str:
-        raise SigmaFeatureNotSupportedByBackendError(
-            "keyword detection (a value with no field) has no VPL equivalent: an event has no "
-            "text of all its fields to search; name the field the value appears in"
-        )
+    def _keyword_field(self) -> str:
+        name = self.backend_options.get("keyword_field")
+        if not name:
+            raise SigmaFeatureNotSupportedByBackendError(
+                "keyword detection (a value with no field): an event has no text of all its "
+                "fields to search; name the field that holds the log line with "
+                "-O keyword_field=message"
+            )
+        return vpl_field(str(name))
 
-    convert_condition_val_str = _no_keywords
-    convert_condition_val_num = _no_keywords
-    convert_condition_val_re = _no_keywords
+    def convert_condition_val_str(self, cond: Any, state: ConversionState) -> str:
+        # A keyword matches anywhere in the line, as Sigma specifies.
+        wildcard = SigmaString("*")
+        return self._string_match(self._keyword_field(), wildcard + cond.value + wildcard, cased=False)
+
+    def convert_condition_val_num(self, cond: Any, state: ConversionState) -> str:
+        return f"contains(to_string({self._keyword_field()}), {vpl_str(str(cond.value))})"
+
+    def convert_condition_val_re(self, cond: Any, state: ConversionState) -> str:
+        field_name = self._keyword_field()
+        return self.convert_condition_field_eq_val_re(
+            ConditionFieldEqualsValueExpression(field_name, cond.value), state
+        ).replace(f"regex_match({vpl_field(field_name)},", f"regex_match({field_name},", 1)
 
     # --- one rule ----------------------------------------------------------
 
@@ -388,7 +430,7 @@ class VarpulisBackend(TextQueryBackend):
             walk(cond.parsed)
         for f in rule.fields or []:
             seen.setdefault(f, None)
-        return [f for f in seen if VPL_IDENTIFIER.match(f)]
+        return [f for f in seen if f and "`" not in f and "\n" not in f]
 
     def finalize_query_default(
         self, rule: SigmaRule, query: str, index: int, state: ConversionState
@@ -482,16 +524,17 @@ class VarpulisBackend(TextQueryBackend):
                 lines.append(f"    .partition_by({names.pop()})")
         emit = self._meta(rule)
         for g in group:
-            emit.append(f"{g}: {aliases[0]}.{self._field_in(rule, g, first, first_ref)}")
+            emit.append(f"{vpl_key(g)}: {aliases[0]}.{self._field_in(rule, g, first, first_ref)}")
         for (ref, step), alias in zip(order, aliases):
             wanted = CONTEXT_FIELDS.get(step.event_type, []) + step.fields
             for f in list(dict.fromkeys(wanted))[:8]:
-                emit.append(f"{step.name}_{f}: {alias}.{f}")
+                emit.append(f"{step.name}_{vpl_key(f)}: {alias}.{vpl_field(f)}")
         lines.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
         return "\n".join(lines)
 
     def _aggregate(self, rule: SigmaCorrelationRule, name: str, source: VplRule, measure: str) -> str:
         group = [self._field_in(rule, g, source, rule.rules[0]) for g in (rule.group_by or [])]
+        keys = [vpl_key(g) for g in (rule.group_by or [])]
         cond = rule.condition
         if cond is None or getattr(cond, "op", None) is None:
             raise SigmaFeatureNotSupportedByBackendError(
@@ -511,10 +554,10 @@ class VarpulisBackend(TextQueryBackend):
         elif len(group) > 1:
             lines.append("    .partition_by(" + " + '|' + ".join(f"to_string({g})" for g in group) + ")")
         lines.append(f"    .window({self._within(rule)})")
-        aggs = [f"{g}: last({g})" for g in group] + [f"n: {measure}"]
+        aggs = [f"{k}: last({g})" for k, g in zip(keys, group)] + [f"n: {measure}"]
         lines.append("    .aggregate(" + ", ".join(aggs) + ")")
         lines.append(f"    .where(n {op} {cond.count})")
-        emit = self._meta(rule) + [f"{g}: {g}" for g in group] + ["count: n"]
+        emit = self._meta(rule) + [f"{k}: {k}" for k in keys] + ["count: n"]
         lines.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
         return "\n".join(lines)
 
@@ -584,7 +627,9 @@ class VarpulisBackend(TextQueryBackend):
             )
         body = [f"stream {rule.name} = {source}", f"    .where({rule.where})"]
         if rule.output:
-            emit = self._meta(rule) + [f"{f}: {f}" for f in rule.fields]
+            emit = self._meta(rule) + list(
+                dict.fromkeys(f"{vpl_key(f)}: {vpl_field(f)}" for f in rule.fields)
+            )
             body.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
             if alert_to:
                 body.append(f"    .to(Bus, topic: {alert_to})")

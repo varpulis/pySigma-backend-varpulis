@@ -107,6 +107,9 @@ def test_numbers_comparisons_null_and_existence():
         "not is_null(CommandLine)"
     )
     assert where(rule("    sel:\n        User|fieldref: TargetUser\n    condition: sel")) == "User == TargetUser"
+    assert where(rule("    sel:\n        CommandLine|fieldref|contains: TargetUser\n    condition: sel")) == (
+        "contains(CommandLine, TargetUser)"
+    )
 
 
 def test_cidr_expands_to_prefixes():
@@ -139,14 +142,27 @@ def test_lists_conditions_and_filters():
     )
 
 
-def test_keyword_searches_have_no_equivalent():
-    with pytest.raises(SigmaError):
+def test_keyword_searches_need_the_field_that_holds_the_line():
+    with pytest.raises(SigmaError, match="keyword_field"):
         convert(rule("    keywords:\n        - mimikatz\n    condition: keywords"))
+    assert where(
+        rule("    keywords:\n        - mimikatz\n        - 'sekurlsa::*'\n    condition: keywords"),
+        keyword_field="message",
+    ) == "contains(lower(message), 'mimikatz') or contains(lower(message), 'sekurlsa::')"
 
 
-def test_a_field_name_vpl_cannot_spell_is_refused_with_the_way_out():
-    with pytest.raises(SigmaError, match="processing pipeline"):
-        convert(rule("    sel:\n        cs-uri-query|contains: 'cmd='\n    condition: sel", "category: webserver"))
+def test_a_field_name_that_is_not_an_identifier_goes_between_backticks():
+    program = convert(rule("    sel:\n        cs-uri-query|contains: 'cmd='\n    condition: sel", "category: webserver"))
+    assert "    .where(contains(lower(`cs-uri-query`), 'cmd='))\n" in program
+    # The alert's own names stay identifiers.
+    assert "cs_uri_query: `cs-uri-query`" in program
+    assert "c_ip: `c-ip`" in program
+
+
+def test_dots_read_nested_objects():
+    assert where(rule("    sel:\n        process.parent.name: cmd.exe\n    condition: sel")) == (
+        "lower(process.parent.name) == 'cmd.exe'"
+    )
 
 
 @pytest.mark.parametrize(

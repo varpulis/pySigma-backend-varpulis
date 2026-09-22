@@ -22,9 +22,16 @@ sigma convert -t varpulis rules/                 # a VPL program on stdout
 sigma convert -t varpulis -f vejas rules/        # the same, bound to a NATS bus
 ```
 
-The generated programs need a Varpulis engine with single-quoted raw strings
-and `regex_match`, which is `main` from 2026-09-23 on (`cargo install --git
-https://github.com/varpulis/varpulis varpulis-cli`).
+The generated programs need a Varpulis engine with single-quoted raw strings,
+`regex_match` and backticked field names, which is `main` from 2026-09-23 on
+(`cargo install --git https://github.com/varpulis/varpulis varpulis-cli`).
+
+On the 3 760 rules of the SigmaHQ repository (2026-09-22), all 3 760 convert
+with `-O keyword_field=message` and 3 653 without it (the 107 others are
+keyword searches, see below), and every generated program passes `varpulis
+check`, the engine's parser and semantic validator. That says the programs
+are well formed. What they catch is tested on the rules in `tests/rules`,
+against events, not on the whole corpus.
 
 ## What a rule becomes
 
@@ -110,7 +117,9 @@ copy, the correlation catches the renamed copy across the two hosts.
 | numbers, `gt`/`gte`/`lt`/`lte` | `F == 4625`, `F >= 1000` |
 | `null`, `exists` | `is_null(F)`, `not is_null(F)` |
 | `cidr` | prefix matches (`starts_with(lower(F), '10.')`) |
-| `fieldref` | `F == G` |
+| `fieldref` (and with `startswith`, `endswith`, `contains`) | `F == G`, `contains(F, G)` |
+| a field name that is not an identifier (`cs-uri-query`) | `` `cs-uri-query` `` |
+| keywords (a value with no field), with `-O keyword_field=message` | `contains(lower(message), 'value')` |
 | `temporal_ordered` | a sequence `A as a -> B where g == a.g as b .within(T)` |
 | `temporal` | that sequence in every order of its rules (up to three) |
 | `event_count`, `value_count` | `.partition_by(g).window(T).aggregate(n: count())`, or `count_distinct(field)` |
@@ -136,20 +145,22 @@ service or category in CamelCase (`WindowsSecurity`, `LinuxProcessCreation`,
 | Option | Default | Meaning |
 |---|---|---|
 | `-O event_type=X` | from the log source | read every rule from event type `X` |
+| `-O keyword_field=F` | none | the field that holds the log line, where keywords are searched |
 | `-O subject_prefix=P` (`-f vejas`) | `logs` | event type `T` is read from the subject `P.T` |
 | `-O alert_subject=S` (`-f vejas`) | `alerts.sigma` | where alerts are published |
 
 ## What does not convert, and why
 
-- **Keyword detections** (a value with no field). An event has no text of all
-  its fields to search, so name the field the value appears in.
+- **Keyword detections** (a value with no field), unless you name the field
+  that holds the log line with `-O keyword_field=message`. An event has no
+  text of all its fields to search.
 - **PCRE-only regular expressions.** The engine uses Rust's `regex`, which
   matches in linear time whatever the input and so has no look-around and no
   back-references. The conversion refuses such a rule and says which construct
   it met, rather than emitting a pattern that would never compile.
-- **Field names VPL cannot spell** (`cs-uri-query`). Rename them with a
-  processing pipeline; dotted paths (`process.parent.name`) are fine and read
-  nested objects.
+- **A dotted field name is a path**: `process.parent.name` reads nested
+  objects. If your events carry flat keys with dots in them (Zeek's
+  `id.orig_h`), rename the fields with a processing pipeline.
 - **`temporal` over four rules or more**, which would take 24 orders and more.
   Write it as `temporal_ordered` when the order is known.
 - **`value_percentile`, `value_median`**, timestamp-part modifiers.
