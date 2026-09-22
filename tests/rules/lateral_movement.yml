@@ -1,0 +1,39 @@
+title: Outbound SMB connection
+name: smb_connection
+id: 5c0e3f0e-6d1a-4e55-9c43-7d2f5f8a0b01
+status: experimental
+logsource:
+    category: network_connection
+    product: windows
+detection:
+    selection:
+        DestinationPort: 445
+    condition: selection
+level: low
+---
+title: Process started by services.exe
+name: service_child
+id: 5c0e3f0e-6d1a-4e55-9c43-7d2f5f8a0b02
+status: experimental
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        ParentImage|endswith: '\services.exe'
+    condition: selection
+level: low
+---
+title: Lateral movement over SMB, judged on behaviour
+id: 5c0e3f0e-6d1a-4e55-9c43-7d2f5f8a0b03
+status: experimental
+correlation:
+    type: temporal_ordered
+    rules:
+        - smb_connection
+        - service_child
+    timespan: 2m
+tags:
+    - attack.lateral_movement
+    - attack.t1021.002
+level: critical

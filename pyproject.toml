@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pySigma-backend-varpulis"
+version = "0.1.0"
+description = "pySigma backend for Varpulis VPL: Sigma rules and correlation rules as detection streams"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "Cyril Poder" }]
+keywords = ["sigma", "pysigma", "detection", "siem", "varpulis", "correlation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Intended Audience :: Information Technology",
+]
+dependencies = ["pysigma>=1.0,<2.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://www.varpulis-cep.com"
+Repository = "https://github.com/varpulis/pySigma-backend-varpulis"
+Issues = "https://github.com/varpulis/pySigma-backend-varpulis/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sigma"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,47 @@
+title: Failed logon
+name: failed_logon
+id: 9a3b1c2d-0000-4a00-8000-000000000001
+status: experimental
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4625
+    condition: selection
+level: low
+---
+title: Many failed logons from one address
+id: 9a3b1c2d-0000-4a00-8000-000000000002
+status: experimental
+correlation:
+    type: event_count
+    rules:
+        - failed_logon
+    group-by:
+        - IpAddress
+    timespan: 5m
+    condition:
+        gte: 5
+tags:
+    - attack.credential_access
+    - attack.t1110
+level: high
+---
+title: Password spraying, one address and many accounts
+id: 9a3b1c2d-0000-4a00-8000-000000000003
+status: experimental
+correlation:
+    type: value_count
+    rules:
+        - failed_logon
+    group-by:
+        - IpAddress
+    timespan: 5m
+    condition:
+        field: TargetUserName
+        gte: 3
+tags:
+    - attack.credential_access
+    - attack.t1110.003
+level: high

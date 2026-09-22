@@ -1,0 +1,186 @@
+# pySigma-backend-varpulis
+
+A [pySigma](https://github.com/SigmaHQ/pySigma) backend that turns Sigma rules,
+correlation rules included, into [VPL](https://www.varpulis-cep.com/docs/language/overview),
+the rule language of the Varpulis detection engine. The output is a program you
+can run as it is: offline against a file of events with `varpulis simulate`, or
+on a NATS bus as a detect unit of [Vejas](https://vejas.dev).
+
+Correlation is the part worth looking at. Sigma's correlation rules
+(`temporal_ordered`, `temporal`, `event_count`, `value_count`) are converted by
+a handful of backends, each into a query over stored events that buckets
+time. Here it becomes what a streaming engine does natively: a `temporal_ordered` correlation is a sequence matched
+as events arrive, in the time the logs carry, and its state survives a restart
+when it runs in Vejas.
+
+## Install and convert
+
+```bash
+pip install sigma-cli
+pip install git+https://github.com/varpulis/pySigma-backend-varpulis
+sigma convert -t varpulis rules/                 # a VPL program on stdout
+sigma convert -t varpulis -f vejas rules/        # the same, bound to a NATS bus
+```
+
+The generated programs need a Varpulis engine with single-quoted raw strings
+and `regex_match`, which is `main` from 2026-09-23 on (`cargo install --git
+https://github.com/varpulis/varpulis varpulis-cli`).
+
+## What a rule becomes
+
+The PsExec rule from SigmaHQ, reduced to its selection:
+
+```yaml
+title: PsExec Execution
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        - Image|endswith: ['\PsExec.exe', '\PsExec64.exe']
+        - OriginalFileName: 'psexec.c'
+    condition: selection
+level: high
+```
+
+```vpl
+# PsExec Execution
+stream PsExecExecution = SysmonProcessCreate
+    .where(ends_with(lower(Image), '\psexec.exe') or ends_with(lower(Image), '\psexec64.exe') or lower(OriginalFileName) == 'psexec.c')
+    .emit(
+        rule: 'PsExec Execution',
+        sigma_id: '730fc21b-eaff-474b-ad23-90fd265d4988',
+        level: 'high',
+        mitre: 'T1569.002,T1021.002',
+        Image: Image,
+        OriginalFileName: OriginalFileName,
+        Computer: Computer,
+        Hostname: Hostname,
+        User: User,
+        CommandLine: CommandLine,
+        ParentImage: ParentImage,
+        ParentCommandLine: ParentCommandLine
+    )
+```
+
+The fields after the rule's own are the ones an analyst needs to act on a
+process alert; one the event does not carry is left out of the alert.
+
+Rename `PsExec.exe` to `svcupdate.exe` and that rule goes quiet. The behaviour
+does not change though (an SMB connection, then a process that `services.exe`
+starts on the target), and that is a two-rule correlation:
+
+```yaml
+correlation:
+    type: temporal_ordered
+    rules:
+        - smb_connection     # DestinationPort: 445
+        - service_child      # ParentImage|endswith: '\services.exe'
+    timespan: 2m
+```
+
+```vpl
+stream LateralMovementOverSMBJudgedOnBehaviour = SmbConnection as a
+    -> ServiceChild as b
+    .within(2m)
+    .emit(
+        rule: 'Lateral movement over SMB, judged on behaviour',
+        level: 'critical',
+        SmbConnection_Hostname: a.Hostname,
+        ServiceChild_Hostname: b.Hostname,
+        ServiceChild_CommandLine: b.CommandLine
+        # ... and the other context fields of both events
+    )
+```
+
+Both files are in [`tests/rules`](tests/rules), and
+[`tests/test_on_varpulis.py`](tests/test_on_varpulis.py) runs them through the
+engine: the file name rule fires on PsExec and stays silent on the renamed
+copy, the correlation catches the renamed copy across the two hosts.
+
+## How things map
+
+| Sigma | VPL |
+|---|---|
+| a value (case-insensitive, as Sigma specifies) | `lower(Field) == 'value'` |
+| `startswith`, `endswith`, `contains` | `starts_with(lower(F), '...')` and friends |
+| `cased` | the same without `lower()` |
+| wildcards inside a value | `regex_match(F, '(?is)^...$')` |
+| `re` (with `i`, `m`, `s`) | `regex_match(F, '(?i)...')` |
+| numbers, `gt`/`gte`/`lt`/`lte` | `F == 4625`, `F >= 1000` |
+| `null`, `exists` | `is_null(F)`, `not is_null(F)` |
+| `cidr` | prefix matches (`starts_with(lower(F), '10.')`) |
+| `fieldref` | `F == G` |
+| `temporal_ordered` | a sequence `A as a -> B where g == a.g as b .within(T)` |
+| `temporal` | that sequence in every order of its rules (up to three) |
+| `event_count`, `value_count` | `.partition_by(g).window(T).aggregate(n: count())`, or `count_distinct(field)` |
+| `value_sum`, `value_avg` | `sum(field)`, `avg(field)` |
+
+Values are written as single-quoted VPL strings, which are raw: a backslash
+is only a backslash, so `'\AppData\Local\Temp\'` goes through exactly as the
+rule wrote it, and `''` stands for a quote.
+
+A condition on a field the event does not carry is false, and `not` of it is
+true, so `selection and not filter` keeps an event that lacks the filter's
+field. That is how Splunk and Elasticsearch behave too, which matters when you
+compare the alerts of a converted rule with the ones your SIEM raised.
+
+The event type comes from the log source. Windows categories take the names
+`varpulis simulate` gives Sysmon events (`SysmonProcessCreate`,
+`SysmonNetworkConnect`, ...); any other log source is its product and
+service or category in CamelCase (`WindowsSecurity`, `LinuxProcessCreation`,
+`Proxy`). `-O event_type=MyEvents` forces one type for every rule.
+
+## Options
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-O event_type=X` | from the log source | read every rule from event type `X` |
+| `-O subject_prefix=P` (`-f vejas`) | `logs` | event type `T` is read from the subject `P.T` |
+| `-O alert_subject=S` (`-f vejas`) | `alerts.sigma` | where alerts are published |
+
+## What does not convert, and why
+
+- **Keyword detections** (a value with no field). An event has no text of all
+  its fields to search, so name the field the value appears in.
+- **PCRE-only regular expressions.** The engine uses Rust's `regex`, which
+  matches in linear time whatever the input and so has no look-around and no
+  back-references. The conversion refuses such a rule and says which construct
+  it met, rather than emitting a pattern that would never compile.
+- **Field names VPL cannot spell** (`cs-uri-query`). Rename them with a
+  processing pipeline; dotted paths (`process.parent.name`) are fine and read
+  nested objects.
+- **`temporal` over four rules or more**, which would take 24 orders and more.
+  Write it as `temporal_ordered` when the order is known.
+- **`value_percentile`, `value_median`**, timestamp-part modifiers.
+
+Two behaviours to know about. Count correlations use tumbling windows, the way
+the Splunk and Elasticsearch backends bucket time, so a burst that straddles a
+window boundary is counted in two halves. And a `temporal` correlation can
+alert twice when its events come in both orders (A, B, A).
+
+## Testing a conversion on your own logs
+
+```bash
+sigma convert -t varpulis my_rules/ > rules.vpl
+varpulis check rules.vpl
+varpulis simulate -p rules.vpl -e events.jsonl -w 1
+```
+
+Each JSON line is one event. Sysmon lines (`EventID` and `Channel`) are typed
+automatically; anything else needs a `"type"` naming the event type the rule
+reads, and an `@timestamp`, since sequences and windows are judged in the time
+the events carry.
+
+## Development
+
+```bash
+pip install -e '.[test]'
+VARPULIS_BIN=/path/to/varpulis pytest
+```
+
+Without a `varpulis` binary the engine tests are skipped, and pytest says so.
+
+## License
+
+MIT.

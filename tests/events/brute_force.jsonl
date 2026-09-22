@@ -1,0 +1,10 @@
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:07Z", "EventID": 4625, "IpAddress": "10.0.0.66", "TargetUserName": "alice", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:14Z", "EventID": 4625, "IpAddress": "10.0.0.66", "TargetUserName": "bob", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:21Z", "EventID": 4625, "IpAddress": "10.0.0.66", "TargetUserName": "carol", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:28Z", "EventID": 4625, "IpAddress": "10.0.0.66", "TargetUserName": "alice", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:35Z", "EventID": 4625, "IpAddress": "10.0.0.66", "TargetUserName": "dave", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:42Z", "EventID": 4625, "IpAddress": "10.0.0.66", "TargetUserName": "eve", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:49Z", "EventID": 4625, "IpAddress": "10.0.0.7", "TargetUserName": "frank", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:00:56Z", "EventID": 4625, "IpAddress": "10.0.0.7", "TargetUserName": "frank", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:01:03Z", "EventID": 4624, "IpAddress": "10.0.0.66", "TargetUserName": "alice", "Computer": "DC01"}
+{"type": "WindowsSecurity", "Channel": "Security", "@timestamp": "2026-09-22T10:15:00Z", "EventID": 4625, "IpAddress": "10.0.0.9", "TargetUserName": "gina", "Computer": "DC01"}
