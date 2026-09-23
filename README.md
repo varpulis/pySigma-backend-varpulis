@@ -28,7 +28,7 @@ The generated programs need a Varpulis engine with single-quoted raw strings,
 `regex_match` and backticked field names, which is `main` from 2026-09-23 on
 (`cargo install --git https://github.com/varpulis/varpulis varpulis-cli`).
 Counts that close on their log source's event time, and correlations over
-counts, need `main` from 2026-09-24 on.
+counts, need `main` from commit `cfe3a01` (2026-09-23 evening) on.
 
 On the 3 760 rules of the SigmaHQ repository (2026-09-22), all 3 760 convert
 with `-O keyword_field=message` and 3 653 without it (the 107 others are
@@ -193,7 +193,7 @@ backends bucket time, so a burst that straddles a window boundary is counted
 in two halves. Such a window closes, and its alert goes out, on the next event
 of its log source past its end, whichever rule or group that event belongs
 to: a brute force counted per address fires even when the attacker got in and
-stopped (Varpulis `main` from 2026-09-24; before, it waited for a later event
+stopped (Varpulis `main` from `cfe3a01`; before, it waited for a later event
 of the same rule and group). Sequences (`temporal_ordered`, and `temporal` up
 to three rules) alert as their last event arrives. And a `temporal` sequence
 can alert twice when its events come in both orders (A, B, A).
