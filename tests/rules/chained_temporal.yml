@@ -1,0 +1,74 @@
+title: Web login
+id: 6d1e2f3a-0000-4000-8000-000000000001
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/login'
+        sc-status: 200
+    condition: selection
+level: informational
+---
+title: Web upload
+id: 6d1e2f3a-0000-4000-8000-000000000002
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem|startswith: '/api/upload'
+        sc-status: 200
+    condition: selection
+level: informational
+---
+title: Web logout
+id: 6d1e2f3a-0000-4000-8000-000000000003
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/logout'
+    condition: selection
+level: informational
+---
+title: Web page
+id: 6d1e2f3a-0000-4000-8000-000000000006
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/index.html'
+    condition: selection
+level: informational
+---
+title: Burst of uploads
+id: 6d1e2f3a-0000-4000-8000-000000000004
+status: test
+correlation:
+    type: event_count
+    rules:
+        - 6d1e2f3a-0000-4000-8000-000000000002
+    timespan: 30s
+    condition:
+        gte: 3
+level: low
+---
+title: Login, upload burst, logout and a page, in any order
+id: 6d1e2f3a-0000-4000-8000-000000000005
+status: test
+correlation:
+    type: temporal
+    rules:
+        - 6d1e2f3a-0000-4000-8000-000000000003
+        - 6d1e2f3a-0000-4000-8000-000000000004
+        - 6d1e2f3a-0000-4000-8000-000000000001
+        - 6d1e2f3a-0000-4000-8000-000000000006
+    timespan: 2m
+level: high

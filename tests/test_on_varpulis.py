@@ -99,8 +99,27 @@ def test_temporal_over_four_rules_fires_once_all_four_are_seen_in_a_window(tmp_p
     assert found[0]["rules"] == 4
 
 
+def test_a_temporal_over_a_count_fires_for_the_session_that_had_the_burst(tmp_path):
+    # The count's window closes on the next web event past its end, and its
+    # alert lands in the temporal window of the same session: only the first
+    # session had three uploads.
+    program = check(program_for("chained_temporal.yml"), tmp_path)
+    found = [a for a in alerts(program, "chained_temporal.jsonl") if a["rule"].startswith("Login, upload burst")]
+    assert len(found) == 1
+    assert found[0]["rules"] == 4
+    assert found[0]["timestamp"].startswith("2026-01-01T10:00")
+
+
 @pytest.mark.parametrize(
-    "rules", ["psexec.yml", "lateral_movement.yml", "brute_force.yml", "windows_channels.yml", "temporal_four.yml"]
+    "rules",
+    [
+        "psexec.yml",
+        "lateral_movement.yml",
+        "brute_force.yml",
+        "windows_channels.yml",
+        "temporal_four.yml",
+        "chained_temporal.yml",
+    ],
 )
 def test_the_vejas_program_checks(rules, tmp_path):
     check(program_for(rules, "vejas"), tmp_path)

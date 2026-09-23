@@ -27,6 +27,8 @@ the latest commit instead of the release.
 The generated programs need a Varpulis engine with single-quoted raw strings,
 `regex_match` and backticked field names, which is `main` from 2026-09-23 on
 (`cargo install --git https://github.com/varpulis/varpulis varpulis-cli`).
+Counts that close on their log source's event time, and correlations over
+counts, need `main` from 2026-09-24 on.
 
 On the 3 760 rules of the SigmaHQ repository (2026-09-22), all 3 760 convert
 with `-O keyword_field=message` and 3 653 without it (the 107 others are
@@ -178,23 +180,23 @@ Every alert from a Windows log source says which machine it came from:
 - **A dotted field name is a path**: `process.parent.name` reads nested
   objects. If your events carry flat keys with dots in them (Zeek's JSON
   writes `id.orig_h` that way), pass `-O dots=flat`.
-- **A correlation over a windowed correlation** (a count, or a `temporal`
-  over more than three rules). A window's alert leaves it when a later event
-  reaches that window, too late to be placed in the window of another
-  correlation. A correlation over a `temporal_ordered` one is converted: a
-  sequence alerts as its last event arrives.
+- **A correlation over a `temporal` of up to three rules**, which is one
+  sequence per order of its rules rather than one stream to read. A
+  correlation over any other correlation (a count, a `temporal_ordered`, a
+  `temporal` over more rules) is converted, and reads that correlation's
+  alerts.
 - **`value_percentile`, `value_median`**, timestamp-part modifiers.
 
 Three behaviours to know about. Count correlations, and `temporal` over more
 than three rules, use tumbling windows, the way the Splunk and Elasticsearch
 backends bucket time, so a burst that straddles a window boundary is counted
-in two halves. With today's engine such a window closes, and its alert goes
-out, when a later event of the same rule and group reaches it (`varpulis
-simulate` closes the rest at the end of the file): on a live stream a count
-that nothing follows waits for that next event. Sequences (`temporal_ordered`,
-and `temporal` up to three rules) alert as their last event arrives. And a
-`temporal` sequence can alert twice when its events come in both orders
-(A, B, A).
+in two halves. Such a window closes, and its alert goes out, on the next event
+of its log source past its end, whichever rule or group that event belongs
+to: a brute force counted per address fires even when the attacker got in and
+stopped (Varpulis `main` from 2026-09-24; before, it waited for a later event
+of the same rule and group). Sequences (`temporal_ordered`, and `temporal` up
+to three rules) alert as their last event arrives. And a `temporal` sequence
+can alert twice when its events come in both orders (A, B, A).
 
 Correlation rules may come in any order, a directory included: the backend
 converts every rule after the rules it refers to. (pySigma's own sort can
