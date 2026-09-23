@@ -1,0 +1,11 @@
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:00Z","cs-uri-stem":"/login","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:05Z","cs-uri-stem":"/api/upload/a","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:06Z","cs-uri-stem":"/api/upload/b","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:07Z","cs-uri-stem":"/api/upload/c","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:20Z","cs-uri-stem":"/index.html","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:40Z","cs-uri-stem":"/logout","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:10:00Z","cs-uri-stem":"/login","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:10:05Z","cs-uri-stem":"/api/upload/d","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:10:20Z","cs-uri-stem":"/index.html","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:10:40Z","cs-uri-stem":"/logout","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:20:00Z","cs-uri-stem":"/index.html","sc-status":200}

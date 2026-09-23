@@ -190,7 +190,7 @@ level: high
     assert "stream Outer = Correlated\n    .window(1h)\n    .aggregate(n: count())\n    .where(n >= 2)\n" in program
 
 
-def test_a_correlation_over_a_windowed_correlation_is_refused_with_the_reason():
+def test_a_sequence_over_a_count_reads_the_count_alerts():
     text = correlation(
         "    type: event_count\n    rules:\n        - smb_connection\n    timespan: 30s\n"
         "    condition:\n        gte: 3"
@@ -204,5 +204,25 @@ correlation:
         - service_child
     timespan: 2m
 """
-    with pytest.raises(SigmaError, match="not a temporal_ordered sequence"):
+    program = convert(text + "---\n" + outer)
+    assert "stream Correlated = SmbConnection\n    .window(30s)" in program
+    assert "stream Outer = Correlated as a\n    -> ServiceChild as b\n" in program
+
+
+def test_a_correlation_over_a_temporal_of_up_to_three_rules_is_refused_with_the_reason():
+    text = correlation(
+        "    type: temporal\n    rules:\n        - smb_connection\n        - service_child\n"
+        "    timespan: 2m"
+    ).replace("title: Correlated\n", "title: Correlated\nname: correlated\n")
+    outer = """title: Outer
+status: test
+correlation:
+    type: event_count
+    rules:
+        - correlated
+    timespan: 1h
+    condition:
+        gte: 2
+"""
+    with pytest.raises(SigmaError, match="a sequence per order of its rules"):
         convert(text + "---\n" + outer)

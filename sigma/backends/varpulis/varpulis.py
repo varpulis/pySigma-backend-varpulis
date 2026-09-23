@@ -298,8 +298,6 @@ class VplCorrelation:
     keys: list[str] = field(default_factory=list)
     #: Streams it reads that are not alerts (a `temporal` marks each rule's events).
     feeders: list[str] = field(default_factory=list)
-    #: One sequence, alerting as its last event arrives (`temporal_ordered`).
-    sequence: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -571,12 +569,11 @@ class VarpulisBackend(TextQueryBackend):
             if converted and isinstance(converted[0], VplCorrelation):
                 # A correlation over a correlation reads the stream of its alerts.
                 inner = converted[0]
-                if not inner.sequence:
+                if len(inner.streams) > 1:
                     raise SigmaFeatureNotSupportedByBackendError(
-                        f"correlation '{rule.title}' refers to '{inner.title}', which is not a "
-                        "temporal_ordered sequence: the alerts of a windowed correlation leave "
-                        "their window when a later event reaches it, too late to be placed in "
-                        "the window of another correlation"
+                        f"correlation '{rule.title}' refers to '{inner.title}', a temporal "
+                        "correlation of up to three rules, which is a sequence per order of its "
+                        "rules rather than one stream to read"
                     )
                 converted = [
                     VplRule(
@@ -813,7 +810,6 @@ class VarpulisBackend(TextQueryBackend):
                 name=name,
                 keys=[vpl_key(g) for g in (rule.group_by or [])],
                 feeders=feeders,
-                sequence=kind == SigmaCorrelationType.TEMPORAL_ORDERED,
             )
         ]
 
