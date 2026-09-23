@@ -31,9 +31,14 @@ The generated programs need a Varpulis engine with single-quoted raw strings,
 On the 3 760 rules of the SigmaHQ repository (2026-09-22), all 3 760 convert
 with `-O keyword_field=message` and 3 653 without it (the 107 others are
 keyword searches, see below), and every generated program passes `varpulis
-check`, the engine's parser and semantic validator. That says the programs
-are well formed. What they catch is tested on the rules in `tests/rules`,
-against events, not on the whole corpus.
+check`, the engine's parser and semantic validator.
+
+What the programs catch is tested as well. In [`bench/`](bench/), the 2 398
+Windows rules that convert run as one program over the 196 081 events of the
+MITRE ATT&CK Evaluations APT29 round (day 1). They raise 2 824 alerts from 81
+rules, and for every rule these are the same events that an independent Sigma
+engine finds (pySigma's SQLite backend, the one Zircolite runs on). The run
+takes 23 s on one core of a laptop.
 
 ## What a rule becomes
 
@@ -138,9 +143,18 @@ compare the alerts of a converted rule with the ones your SIEM raised.
 
 The event type comes from the log source. Windows categories take the names
 `varpulis simulate` gives Sysmon events (`SysmonProcessCreate`,
-`SysmonNetworkConnect`, ...); any other log source is its product and
-service or category in CamelCase (`WindowsSecurity`, `LinuxProcessCreation`,
-`Proxy`). `-O event_type=MyEvents` forces one type for every rule.
+`SysmonNetworkConnect`, ...). A category that covers several Sysmon events
+reads all of them: `registry_event` is events 12, 13 and 14, as in pySigma's
+Sysmon pipeline, so the rule reads
+`merge(SysmonRegistryAddDel, SysmonRegistryValueSet, Sysmon14)`. The
+PowerShell categories are one event of their channel: `ps_script` reads
+`WindowsPowershell` and tests `EventID == 4104`. Any other log source is its
+product and service or category in CamelCase (`WindowsSecurity`,
+`LinuxProcessCreation`, `Proxy`). `-O event_type=MyEvents` forces one type for
+every rule.
+
+Every alert from a Windows log source says which machine it came from:
+`Computer`, or `Hostname`, whichever the event carries.
 
 ## Options
 
@@ -184,7 +198,19 @@ varpulis simulate -p rules.vpl -e events.jsonl -w 1
 Each JSON line is one event. Sysmon lines (`EventID` and `Channel`) are typed
 automatically; anything else needs a `"type"` naming the event type the rule
 reads, and an `@timestamp`, since sequences and windows are judged in the time
-the events carry.
+the events carry. For Windows event logs that means one type per channel,
+the way a shipper sends each channel to its own subject:
+
+| Channel | Event type |
+|---|---|
+| `Security` | `WindowsSecurity` |
+| `System` | `WindowsSystem` |
+| `Microsoft-Windows-PowerShell/Operational` | `WindowsPowershell` |
+| `Windows PowerShell` | `WindowsPowershellClassic` |
+| `Microsoft-Windows-WMI-Activity/Operational` | `WindowsWmi` |
+
+and so on, after the channel's Sigma service. [`bench/prep.py`](bench/prep.py)
+does exactly that to the APT29 dataset.
 
 ## Development
 
