@@ -19,6 +19,12 @@ on:
 permissions:
   contents: read
 
+# GitHub can deliver one tag push twice; the second run waits for the first
+# and then finds the release and the files already there.
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -55,6 +61,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && exit 0
           gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --notes "pip install https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$(cd dist && ls *.whl)"
@@ -74,3 +81,5 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
