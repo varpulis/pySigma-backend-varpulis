@@ -229,32 +229,34 @@ _UNSUPPORTED_RE = [
 
 
 def referenced_first(rules: list[Any]) -> list[Any]:
-    """The rules in an order where each comes after every rule it refers to,
-    and otherwise in the order given.
+    """The rules in an order where each comes after every rule it refers to: a
+    referenced rule moves up to just before the first rule that needs it, and
+    the order is otherwise kept.
 
     pySigma sorts a collection with a comparison that is only a partial order
     ("A is referenced by B"), and a sort does not turn a partial order into a
     topological one: loaded from a directory, in the file system's order, a
     correlation could stay ahead of a rule it refers to, and converting it
-    failed with "Conversion result not available"."""
-    present = {id(r) for r in rules}
+    failed with "Conversion result not available" (SigmaHQ/pySigma#552)."""
+    # Backreferences cover every way a rule refers to another: a correlation's
+    # rules, and the rules an extended condition names.
+    refers_to: dict[int, list[Any]] = {}
+    for rule in rules:
+        for referencing in getattr(rule, "_backreferences", []):
+            refers_to.setdefault(id(referencing), []).append(rule)
     ordered: list[Any] = []
     placed: set[int] = set()
 
-    def place(rule: Any, path: tuple[int, ...]) -> None:
+    def place(rule: Any) -> None:
         if id(rule) in placed:
             return
-        if id(rule) in path:
-            raise SigmaConversionError(f"correlation '{rule.title}' refers to itself through its rules")
-        if isinstance(rule, SigmaCorrelationRule):
-            for ref in rule.rules:
-                if id(ref.rule) in present:
-                    place(ref.rule, path + (id(rule),))
         placed.add(id(rule))
+        for referenced in refers_to.get(id(rule), []):
+            place(referenced)
         ordered.append(rule)
 
     for rule in rules:
-        place(rule, ())
+        place(rule)
     return ordered
 
 
