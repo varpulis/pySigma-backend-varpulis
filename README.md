@@ -128,7 +128,7 @@ copy, the correlation catches the renamed copy across the two hosts.
 | a field name that is not an identifier (`cs-uri-query`) | `` `cs-uri-query` `` |
 | keywords (a value with no field), with `-O keyword_field=message` | `contains(lower(message), 'value')` |
 | `temporal_ordered` | a sequence `A as a -> B where g == a.g as b .within(T)` |
-| `temporal` | that sequence in every order of its rules (up to three) |
+| `temporal` | that sequence in every order of its rules, up to three; over three, the distinct rules seen per group in a window of the timespan (`merge(...).window(T).aggregate(rules: count_distinct(sigma_rule))`) |
 | `event_count`, `value_count` | `.partition_by(g).window(T).aggregate(n: count())`, or `count_distinct(field)` |
 | `value_sum`, `value_avg` | `sum(field)`, `avg(field)` |
 
@@ -178,14 +178,28 @@ Every alert from a Windows log source says which machine it came from:
 - **A dotted field name is a path**: `process.parent.name` reads nested
   objects. If your events carry flat keys with dots in them (Zeek's JSON
   writes `id.orig_h` that way), pass `-O dots=flat`.
-- **`temporal` over four rules or more**, which would take 24 orders and more.
-  Write it as `temporal_ordered` when the order is known.
+- **A correlation over a windowed correlation** (a count, or a `temporal`
+  over more than three rules). A window's alert leaves it when a later event
+  reaches that window, too late to be placed in the window of another
+  correlation. A correlation over a `temporal_ordered` one is converted: a
+  sequence alerts as its last event arrives.
 - **`value_percentile`, `value_median`**, timestamp-part modifiers.
 
-Two behaviours to know about. Count correlations use tumbling windows, the way
-the Splunk and Elasticsearch backends bucket time, so a burst that straddles a
-window boundary is counted in two halves. And a `temporal` correlation can
-alert twice when its events come in both orders (A, B, A).
+Three behaviours to know about. Count correlations, and `temporal` over more
+than three rules, use tumbling windows, the way the Splunk and Elasticsearch
+backends bucket time, so a burst that straddles a window boundary is counted
+in two halves. With today's engine such a window closes, and its alert goes
+out, when a later event of the same rule and group reaches it (`varpulis
+simulate` closes the rest at the end of the file): on a live stream a count
+that nothing follows waits for that next event. Sequences (`temporal_ordered`,
+and `temporal` up to three rules) alert as their last event arrives. And a
+`temporal` sequence can alert twice when its events come in both orders
+(A, B, A).
+
+Correlation rules may come in any order, a directory included: the backend
+converts every rule after the rules it refers to. (pySigma's own sort can
+leave a correlation ahead of its rules, and every backend then fails with
+"Conversion result not available".)
 
 ## Testing a conversion on your own logs
 
