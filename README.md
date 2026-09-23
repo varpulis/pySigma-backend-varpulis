@@ -16,14 +16,13 @@ when it runs in Vejas.
 ## Install and convert
 
 ```bash
-pip install sigma-cli
-pip install https://github.com/varpulis/pySigma-backend-varpulis/releases/download/v0.1.0/pysigma_backend_varpulis-0.1.0-py3-none-any.whl
+pip install sigma-cli pysigma-backend-varpulis
 sigma convert -t varpulis rules/                 # a VPL program on stdout
 sigma convert -t varpulis -f vejas rules/        # the same, bound to a NATS bus
 ```
 
 `pip install git+https://github.com/varpulis/pySigma-backend-varpulis` gives
-the latest commit instead of the release. The package is not on PyPI yet.
+the latest commit instead of the release.
 
 The generated programs need a Varpulis engine with single-quoted raw strings,
 `regex_match` and backticked field names, which is `main` from 2026-09-23 on
