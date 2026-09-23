@@ -1,0 +1,42 @@
+title: Run key written
+id: 5c2f1a7e-0000-4000-8000-000000000011
+status: test
+description: Any registry event on a Run key (Sysmon 12, 13 and 14 are all registry_event).
+logsource:
+    product: windows
+    category: registry_event
+detection:
+    selection:
+        TargetObject|contains: '\CurrentVersion\Run\'
+    condition: selection
+level: medium
+tags:
+    - attack.persistence
+    - attack.t1547.001
+---
+title: Mimikatz in a PowerShell script block
+id: 5c2f1a7e-0000-4000-8000-000000000012
+status: test
+logsource:
+    product: windows
+    category: ps_script
+detection:
+    selection:
+        ScriptBlockText|contains: 'Invoke-Mimikatz'
+    condition: selection
+level: high
+tags:
+    - attack.credential-access
+    - attack.t1003.001
+---
+title: PowerShell channel mentions Mimikatz
+id: 5c2f1a7e-0000-4000-8000-000000000013
+status: test
+logsource:
+    product: windows
+    service: powershell
+detection:
+    selection:
+        ScriptBlockText|contains: 'Invoke-Mimikatz'
+    condition: selection
+level: medium

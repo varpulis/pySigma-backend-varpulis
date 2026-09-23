@@ -1,0 +1,4 @@
+# The oracle: an independent Sigma engine to check the alerts against.
+pySigma-backend-sqlite==1.2.4
+pySigma-pipeline-sysmon==2.0.0
+pySigma-pipeline-windows==2.0.0

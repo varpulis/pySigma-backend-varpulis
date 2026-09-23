@@ -179,6 +179,14 @@ def test_dots_read_nested_objects():
         ("category: process_creation\n    product: windows", "SysmonProcessCreate"),
         ("category: network_connection\n    product: windows", "SysmonNetworkConnect"),
         ("category: registry_set\n    product: windows", "SysmonRegistryValueSet"),
+        (
+            "category: registry_event\n    product: windows",
+            "merge(SysmonRegistryAddDel, SysmonRegistryValueSet, Sysmon14)",
+        ),
+        ("category: pipe_created\n    product: windows", "merge(SysmonPipeCreated, SysmonPipeConnected)"),
+        ("category: ps_script\n    product: windows", "WindowsPowershell"),
+        ("category: ps_classic_start\n    product: windows", "WindowsPowershellClassic"),
+        ("product: windows\n    service: powershell", "WindowsPowershell"),
         ("product: windows\n    service: security", "WindowsSecurity"),
         ("category: process_creation\n    product: linux", "LinuxProcessCreation"),
         ("category: proxy", "Proxy"),
@@ -187,6 +195,36 @@ def test_dots_read_nested_objects():
 def test_event_type_follows_the_log_source(logsource, event_type):
     program = convert(rule("    sel:\n        Image: x\n    condition: sel", logsource))
     assert f"stream TestRule = {event_type}\n" in program
+
+
+def test_a_powershell_category_is_its_channel_and_event_id():
+    assert where(
+        rule("    sel:\n        ScriptBlockText|contains: x\n    condition: sel", "category: ps_script\n    product: windows")
+    ) == "EventID == 4104 and (contains(lower(ScriptBlockText), 'x'))"
+    assert where(
+        rule("    sel:\n        Data|contains: x\n    condition: sel", "category: ps_classic_start\n    product: windows")
+    ) == "EventID == 400 and (contains(lower(Data), 'x'))"
+
+
+def test_a_rule_over_several_sysmon_events_carries_the_context_of_each():
+    program = convert(rule("    sel:\n        TargetObject|contains: x\n    condition: sel", "category: registry_event\n    product: windows"))
+    assert "Details: Details" in program
+    assert "TargetObject: TargetObject" in program
+
+
+@pytest.mark.parametrize(
+    "logsource",
+    [
+        "product: windows\n    service: security",
+        "category: ps_script\n    product: windows",
+        "category: raw_access_thread\n    product: windows",
+        "product: windows\n    service: system",
+    ],
+)
+def test_every_windows_alert_says_which_machine(logsource):
+    program = convert(rule("    sel:\n        Data: x\n    condition: sel", logsource))
+    assert "Computer: Computer" in program
+    assert "Hostname: Hostname" in program
 
 
 def test_event_type_can_be_forced():
@@ -211,3 +249,15 @@ def test_the_vejas_format_binds_sources_and_alerts_to_the_bus():
     assert "stream SysmonProcessCreateSource = SysmonProcessCreate\n    .from(Bus, topic: 'sysmon.SysmonProcessCreate')" in program
     assert "stream TestRule = SysmonProcessCreateSource\n" in program
     assert "    .to(Bus, topic: 'alerts.soc')" in program
+
+
+def test_the_vejas_format_merges_the_sources_of_a_rule_over_several_events():
+    program = VarpulisBackend().convert(
+        SigmaCollection.from_yaml(
+            rule("    sel:\n        TargetObject: x\n    condition: sel", "category: registry_event\n    product: windows")
+        ),
+        "vejas",
+    )
+    for t in ["SysmonRegistryAddDel", "SysmonRegistryValueSet", "Sysmon14"]:
+        assert f"stream {t}Source = {t}\n    .from(Bus, topic: 'logs.{t}')" in program
+    assert "stream TestRule = merge(SysmonRegistryAddDelSource, SysmonRegistryValueSetSource, Sysmon14Source)\n" in program

@@ -77,6 +77,21 @@ def test_counts_fire_once_per_address_that_crosses_the_threshold(tmp_path):
     assert by_rule["Password spraying, one address and many accounts"]["count"] == 5
 
 
-@pytest.mark.parametrize("rules", ["psexec.yml", "lateral_movement.yml", "brute_force.yml"])
+def test_a_category_over_several_sysmon_events_sees_each_and_powershell_is_read_by_channel(tmp_path):
+    program = check(program_for("windows_channels.yml"), tmp_path)
+    found = alerts(program, "windows_channels.jsonl")
+    assert found and all(a["Computer"] == "WS01" for a in found)
+    run_keys = [a for a in found if a["rule"] == "Run key written"]
+    assert sorted(a["TargetObject"][-1] for a in run_keys) == ["a", "b", "c"]
+    # ps_script is event 4104 of the PowerShell channel; the service rule sees
+    # the whole channel, the module log included.
+    assert [a["rule"] for a in found if "Mimikatz" in a["rule"]] == [
+        "Mimikatz in a PowerShell script block",
+        "PowerShell channel mentions Mimikatz",
+        "PowerShell channel mentions Mimikatz",
+    ]
+
+
+@pytest.mark.parametrize("rules", ["psexec.yml", "lateral_movement.yml", "brute_force.yml", "windows_channels.yml"])
 def test_the_vejas_program_checks(rules, tmp_path):
     check(program_for(rules, "vejas"), tmp_path)

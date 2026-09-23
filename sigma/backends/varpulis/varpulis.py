@@ -53,8 +53,10 @@ from sigma.types import (
 # ---------------------------------------------------------------------------
 
 #: Sysmon categories, named as `varpulis simulate` names Sysmon events it
-#: reads from JSON lines (by `EventID` on the Sysmon channel).
-SYSMON_EVENT_TYPES: dict[str, str] = {
+#: reads from JSON lines (by `EventID` on the Sysmon channel). A category that
+#: covers several Sysmon events (`registry_event` is events 12, 13 and 14, as
+#: in pySigma's Sysmon pipeline) reads all of their types.
+SYSMON_EVENT_TYPES: dict[str, str | tuple[str, ...]] = {
     "process_creation": "SysmonProcessCreate",
     "file_change": "SysmonFileCreateTime",
     "network_connection": "SysmonNetworkConnect",
@@ -69,16 +71,32 @@ SYSMON_EVENT_TYPES: dict[str, str] = {
     "registry_delete": "SysmonRegistryAddDel",
     "registry_set": "SysmonRegistryValueSet",
     "registry_rename": "Sysmon14",
+    "registry_event": ("SysmonRegistryAddDel", "SysmonRegistryValueSet", "Sysmon14"),
     "create_stream_hash": "SysmonFileCreateStreamHash",
-    "pipe_created": "SysmonPipeCreated",
+    "pipe_created": ("SysmonPipeCreated", "SysmonPipeConnected"),
+    "wmi_event": ("Sysmon19", "Sysmon20", "Sysmon21"),
     "dns_query": "SysmonDnsQuery",
     "file_delete": "SysmonFileDelete",
+    "clipboard_capture": "Sysmon24",
+    "process_tampering": "Sysmon25",
     "file_delete_detected": "Sysmon26",
     "file_block_executable": "Sysmon27",
     "file_block_shredding": "Sysmon28",
     "file_executable_detected": "Sysmon29",
-    "sysmon_status": "Sysmon4",
+    "sysmon_status": ("Sysmon4", "Sysmon16"),
     "sysmon_error": "Sysmon255",
+}
+
+#: Windows categories that are one event of a channel, as the Sigma taxonomy
+#: defines them: the rule reads the channel's event type (`ps_script` reads
+#: `WindowsPowershell`, the type of every line of that channel) and tests the
+#: EventID, so a rule written for the channel sees the same lines.
+WINDOWS_CHANNEL_EVENTS: dict[str, tuple[str, int]] = {
+    "ps_module": ("powershell", 4103),
+    "ps_script": ("powershell", 4104),
+    "ps_classic_start": ("powershell-classic", 400),
+    "ps_classic_provider_start": ("powershell-classic", 600),
+    "ps_classic_script": ("powershell-classic", 800),
 }
 
 #: Fields an analyst needs to act on an alert, per event type. They are added
@@ -117,20 +135,49 @@ def camel(*words: str | None) -> str:
     return name
 
 
-def event_type_for(rule: SigmaRule | None) -> str:
-    """The VPL event type a rule's log source is read as.
+def event_types_for(rule: SigmaRule | None) -> list[str]:
+    """The VPL event types a rule's log source is read from.
 
     Windows categories are Sysmon's (the names `varpulis simulate` gives Sysmon
-    JSON lines); anything else is the log source in CamelCase, product first:
-    `windows`/`security` is `WindowsSecurity`, `linux`/`process_creation` is
-    `LinuxProcessCreation`, `proxy` is `Proxy`.
+    JSON lines), several of them for a category that covers several Sysmon
+    events; the PowerShell categories are their channel. Anything else is the
+    log source in CamelCase, product first: `windows`/`security` is
+    `WindowsSecurity`, `linux`/`process_creation` is `LinuxProcessCreation`,
+    `proxy` is `Proxy`.
     """
     if rule is None:
-        return "Event"
+        return ["Event"]
     ls = rule.logsource
-    if ls.product == "windows" and ls.category in SYSMON_EVENT_TYPES and not ls.service:
-        return SYSMON_EVENT_TYPES[ls.category]
-    return camel(ls.product, ls.service or ls.category) if (ls.product or ls.service or ls.category) else "Event"
+    if ls.product == "windows" and not ls.service:
+        if ls.category in SYSMON_EVENT_TYPES:
+            types = SYSMON_EVENT_TYPES[ls.category]
+            return [types] if isinstance(types, str) else list(types)
+        if ls.category in WINDOWS_CHANNEL_EVENTS:
+            return [camel("windows", WINDOWS_CHANNEL_EVENTS[ls.category][0])]
+    return [camel(ls.product, ls.service or ls.category) if (ls.product or ls.service or ls.category) else "Event"]
+
+
+def channel_event_id(rule: SigmaRule) -> int | None:
+    """The EventID a Windows category stands for within its channel."""
+    ls = rule.logsource
+    if ls.product == "windows" and not ls.service and ls.category in WINDOWS_CHANNEL_EVENTS:
+        return WINDOWS_CHANNEL_EVENTS[ls.category][1]
+    return None
+
+
+#: Where a Windows event happened: `Computer` in Windows event logs, `Hostname`
+#: in some exports (NXLog, the OTRF/Mordor datasets). Every alert from a
+#: Windows log source carries whichever the event has.
+WINDOWS_HOST: list[str] = ["Computer", "Hostname"]
+
+
+def context_fields(event_types: list[str]) -> list[str]:
+    fields: list[str] = []
+    for t in event_types:
+        if t.startswith(("Windows", "Sysmon")):
+            fields += WINDOWS_HOST
+        fields += CONTEXT_FIELDS.get(t, [])
+    return list(dict.fromkeys(fields))
 
 
 def vpl_str(text: str) -> str:
@@ -194,7 +241,7 @@ class VplRule:
     title: str
     rule_id: str | None
     level: str | None
-    event_type: str
+    event_types: list[str]
     where: str
     fields: list[str]
     mitre: list[str]
@@ -416,9 +463,9 @@ class VarpulisBackend(TextQueryBackend):
     def _stream_name(self, rule: SigmaRule | SigmaCorrelationRule) -> str:
         return self._unique_name(camel(getattr(rule, "name", None) or rule.title or "SigmaRule"))
 
-    def _event_type(self, rule: SigmaRule) -> str:
+    def _event_types(self, rule: SigmaRule) -> list[str]:
         forced = self.backend_options.get("event_type")
-        return str(forced) if forced else event_type_for(rule)
+        return [str(forced)] if forced else event_types_for(rule)
 
     @staticmethod
     def _mitre(rule: SigmaRule | SigmaCorrelationRule) -> list[str]:
@@ -447,16 +494,16 @@ class VarpulisBackend(TextQueryBackend):
     def finalize_query_default(
         self, rule: SigmaRule, query: str, index: int, state: ConversionState
     ) -> VplRule:
+        event_types = self._event_types(rule)
+        event_id = channel_event_id(rule)
         return VplRule(
             name=self._stream_name(rule),
             title=rule.title,
             rule_id=str(rule.id) if rule.id else None,
             level=str(rule.level.name).lower() if rule.level else None,
-            event_type=self._event_type(rule),
-            where=query,
-            fields=list(
-                dict.fromkeys(self._detection_fields(rule) + CONTEXT_FIELDS.get(self._event_type(rule), []))
-            ),
+            event_types=event_types,
+            where=query if event_id is None else f"EventID == {event_id} and ({query})",
+            fields=list(dict.fromkeys(self._detection_fields(rule) + context_fields(event_types))),
             mitre=self._mitre(rule),
             output=bool(getattr(rule, "_output", True)),
         )
@@ -538,7 +585,7 @@ class VarpulisBackend(TextQueryBackend):
         for g in group:
             emit.append(f"{vpl_key(g)}: {aliases[0]}.{self._field_in(rule, g, first, first_ref)}")
         for (ref, step), alias in zip(order, aliases):
-            wanted = CONTEXT_FIELDS.get(step.event_type, []) + step.fields
+            wanted = context_fields(step.event_types) + step.fields
             for f in list(dict.fromkeys(wanted))[:8]:
                 emit.append(f"{step.name}_{vpl_key(f)}: {alias}.{self._field(f)}")
         lines.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
@@ -631,12 +678,16 @@ class VarpulisBackend(TextQueryBackend):
 
     # --- the program -------------------------------------------------------
 
-    def _rule_stream(self, rule: VplRule, source: str, alert_to: str | None) -> str:
+    def _rule_stream(self, rule: VplRule, sources: dict[str, str], alert_to: str | None) -> str:
         head = [f"# {rule.title}"]
         if rule.rule_id or rule.level:
             head.append(
                 "# sigma " + " ".join(x for x in [rule.rule_id, f"level {rule.level}" if rule.level else None] if x)
             )
+        if len(rule.event_types) == 1:
+            source = sources[rule.event_types[0]]
+        else:
+            source = "merge(" + ", ".join(sources[t] for t in rule.event_types) + ")"
         body = [f"stream {rule.name} = {source}", f"    .where({rule.where})"]
         if rule.output:
             emit = self._meta(rule) + list(
@@ -657,7 +708,7 @@ class VarpulisBackend(TextQueryBackend):
                 correlations.append(q)
                 for r in q.rules:
                     rules.setdefault(r.name, r)
-        event_types = sorted({r.event_type for r in rules.values()})
+        event_types = sorted({t for r in rules.values() for t in r.event_types})
 
         out = ["# Converted from Sigma by pySigma-backend-varpulis."]
         sources: dict[str, str] = {t: t for t in event_types}
@@ -670,7 +721,7 @@ class VarpulisBackend(TextQueryBackend):
                 sources[t] = f"{t}Source"
                 out.append(f"\nstream {t}Source = {t}\n    .from(Bus, topic: {vpl_str(prefix + '.' + t)})")
         for rule in rules.values():
-            out.append("\n" + self._rule_stream(rule, sources[rule.event_type], alert_to))
+            out.append("\n" + self._rule_stream(rule, sources, alert_to))
         for corr in correlations:
             head = f"# {corr.title}"
             if corr.rule_id:
