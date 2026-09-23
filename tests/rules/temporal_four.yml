@@ -1,0 +1,64 @@
+title: Console login
+id: 7e2f3a4b-0000-4000-8000-000000000001
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/login'
+        sc-status: 200
+    condition: selection
+level: informational
+---
+title: Console websocket
+id: 7e2f3a4b-0000-4000-8000-000000000002
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/ws'
+        sc-status: 200
+    condition: selection
+level: informational
+---
+title: SSH console open
+id: 7e2f3a4b-0000-4000-8000-000000000003
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/ssh/open'
+        sc-status: 200
+    condition: selection
+level: informational
+---
+title: SSH console write
+id: 7e2f3a4b-0000-4000-8000-000000000004
+status: test
+logsource:
+    product: apache
+    service: access
+detection:
+    selection:
+        cs-uri-stem: '/ssh/write'
+        sc-status: 200
+    condition: selection
+level: informational
+---
+title: Console session that writes to the SSH console
+id: 7e2f3a4b-0000-4000-8000-000000000010
+status: test
+correlation:
+    type: temporal
+    rules:
+        - 7e2f3a4b-0000-4000-8000-000000000004
+        - 7e2f3a4b-0000-4000-8000-000000000001
+        - 7e2f3a4b-0000-4000-8000-000000000003
+        - 7e2f3a4b-0000-4000-8000-000000000002
+    timespan: 10m
+level: high

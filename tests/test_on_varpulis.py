@@ -92,6 +92,15 @@ def test_a_category_over_several_sysmon_events_sees_each_and_powershell_is_read_
     ]
 
 
-@pytest.mark.parametrize("rules", ["psexec.yml", "lateral_movement.yml", "brute_force.yml", "windows_channels.yml"])
+def test_temporal_over_four_rules_fires_once_all_four_are_seen_in_a_window(tmp_path):
+    program = check(program_for("temporal_four.yml"), tmp_path)
+    found = [a for a in alerts(program, "temporal_four.jsonl") if a["rule"].startswith("Console session")]
+    assert len(found) == 1
+    assert found[0]["rules"] == 4
+
+
+@pytest.mark.parametrize(
+    "rules", ["psexec.yml", "lateral_movement.yml", "brute_force.yml", "windows_channels.yml", "temporal_four.yml"]
+)
 def test_the_vejas_program_checks(rules, tmp_path):
     check(program_for(rules, "vejas"), tmp_path)

@@ -121,7 +121,7 @@ def test_generate_keeps_the_referenced_rules_as_alerts():
     assert "stream SmbConnection = SysmonNetworkConnect\n    .where(DestinationPort == 445)\n    .emit(" in program
 
 
-def test_temporal_over_four_rules_is_refused():
+def test_temporal_over_four_rules_counts_the_distinct_rules_seen_in_a_window():
     extra = "".join(
         f"""---
 title: Extra {i}
@@ -145,5 +145,64 @@ correlation:
     rules: [smb_connection, service_child, extra_1, extra_2]
     timespan: 5m
 """
-    with pytest.raises(SigmaError, match="temporal_ordered"):
-        convert(yaml_text)
+    program = convert(yaml_text)
+    assert "stream TooMany_Extra1 = Extra1\n    .select(sigma_rule: 'Extra1')" in program
+    assert (
+        "stream TooMany = merge(TooMany_SmbConnection, TooMany_ServiceChild, TooMany_Extra1, TooMany_Extra2)\n"
+        "    .window(5m)\n    .aggregate(rules: count_distinct(sigma_rule))\n    .where(rules >= 4)\n"
+    ) in program
+
+
+def test_a_correlation_ahead_of_the_rules_it_refers_to_still_converts():
+    # A directory is read in the file system's order, and pySigma's sort (a
+    # partial order) can leave a correlation ahead of its rules: the
+    # conversion then failed with "Conversion result not available".
+    text = correlation(
+        "    type: temporal_ordered\n    rules:\n        - smb_connection\n        - service_child\n"
+        "    timespan: 2m"
+    )
+    rules = text.split("\n---\n")
+    unrelated = rules[0].replace("smb_connection", "unrelated").replace("-000000000001", "-0000000000aa")
+    program = convert("\n---\n".join([rules[2], unrelated, rules[0], rules[1]]))
+    assert "stream Correlated = SmbConnection as a\n    -> ServiceChild as b\n" in program
+
+
+def test_a_count_over_a_sequence_reads_the_sequence_alerts():
+    text = correlation(
+        "    type: temporal_ordered\n    rules:\n        - smb_connection\n        - service_child\n"
+        "    timespan: 2m"
+    ).replace("title: Correlated\n", "title: Correlated\nname: correlated\n")
+    outer = """title: Outer
+id: 2b0b2c3d-0000-4000-8000-0000000000fe
+status: test
+correlation:
+    type: event_count
+    rules:
+        - correlated
+    timespan: 1h
+    condition:
+        gte: 2
+level: high
+"""
+    rules = text.split("\n---\n")
+    program = convert("\n---\n".join([outer, rules[2], rules[1], rules[0]]))
+    assert program.index("stream Correlated =") < program.index("stream Outer =")
+    assert "stream Outer = Correlated\n    .window(1h)\n    .aggregate(n: count())\n    .where(n >= 2)\n" in program
+
+
+def test_a_correlation_over_a_windowed_correlation_is_refused_with_the_reason():
+    text = correlation(
+        "    type: event_count\n    rules:\n        - smb_connection\n    timespan: 30s\n"
+        "    condition:\n        gte: 3"
+    ).replace("title: Correlated\n", "title: Correlated\nname: correlated\n")
+    outer = """title: Outer
+status: test
+correlation:
+    type: temporal_ordered
+    rules:
+        - correlated
+        - service_child
+    timespan: 2m
+"""
+    with pytest.raises(SigmaError, match="not a temporal_ordered sequence"):
+        convert(text + "---\n" + outer)

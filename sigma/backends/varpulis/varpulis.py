@@ -37,7 +37,7 @@ from sigma.correlations import (
     SigmaCorrelationRule,
     SigmaCorrelationType,
 )
-from sigma.exceptions import SigmaFeatureNotSupportedByBackendError
+from sigma.exceptions import SigmaConversionError, SigmaError, SigmaFeatureNotSupportedByBackendError
 from sigma.rule import SigmaRule
 from sigma.types import (
     CompareOperators,
@@ -228,6 +228,38 @@ _UNSUPPORTED_RE = [
 ]
 
 
+def referenced_first(rules: list[Any]) -> list[Any]:
+    """The rules in an order where each comes after every rule it refers to: a
+    referenced rule moves up to just before the first rule that needs it, and
+    the order is otherwise kept.
+
+    pySigma sorts a collection with a comparison that is only a partial order
+    ("A is referenced by B"), and a sort does not turn a partial order into a
+    topological one: loaded from a directory, in the file system's order, a
+    correlation could stay ahead of a rule it refers to, and converting it
+    failed with "Conversion result not available" (SigmaHQ/pySigma#552)."""
+    # Backreferences cover every way a rule refers to another: a correlation's
+    # rules, and the rules an extended condition names.
+    refers_to: dict[int, list[Any]] = {}
+    for rule in rules:
+        for referencing in getattr(rule, "_backreferences", []):
+            refers_to.setdefault(id(referencing), []).append(rule)
+    ordered: list[Any] = []
+    placed: set[int] = set()
+
+    def place(rule: Any) -> None:
+        if id(rule) in placed:
+            return
+        placed.add(id(rule))
+        for referenced in refers_to.get(id(rule), []):
+            place(referenced)
+        ordered.append(rule)
+
+    for rule in rules:
+        place(rule)
+    return ordered
+
+
 # ---------------------------------------------------------------------------
 # What conversion produces, before it is written out as VPL
 # ---------------------------------------------------------------------------
@@ -246,6 +278,9 @@ class VplRule:
     fields: list[str]
     mitre: list[str]
     output: bool = True
+    #: The alerts of a correlation that another correlation refers to: its
+    #: stream is the correlation's own, already written.
+    correlation: bool = False
 
 
 @dataclass
@@ -258,6 +293,13 @@ class VplCorrelation:
     rules: list[VplRule]
     streams: list[str] = field(default_factory=list)
     output: bool = True
+    name: str = ""
+    #: The fields its alerts carry besides the rule's identity (group-by keys).
+    keys: list[str] = field(default_factory=list)
+    #: Streams it reads that are not alerts (a `temporal` marks each rule's events).
+    feeders: list[str] = field(default_factory=list)
+    #: One sequence, alerting as its last event arrives (`temporal_ordered`).
+    sequence: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +369,13 @@ class VarpulisBackend(TextQueryBackend):
     def __init__(self, processing_pipeline=None, collect_errors: bool = False, **backend_options: Any):
         super().__init__(processing_pipeline, collect_errors, **backend_options)
         self._names: dict[str, int] = {}
+
+    def convert(self, rule_collection, output_format=None, correlation_method=None, callback=None):
+        # pySigma resolves the references and sorts again; a list already in
+        # reference order is one ascending run to its sort, so it stays.
+        rule_collection.resolve_rule_references()
+        rule_collection.rules = referenced_first(rule_collection.rules)
+        return super().convert(rule_collection, output_format, correlation_method, callback)
 
     # --- fields ------------------------------------------------------------
 
@@ -515,7 +564,34 @@ class VarpulisBackend(TextQueryBackend):
     def _referenced(self, rule: SigmaCorrelationRule) -> list[VplRule]:
         out = []
         for ref in rule.rules:
-            converted = ref.rule.get_conversion_result()
+            try:
+                converted = ref.rule.get_conversion_result()
+            except SigmaConversionError:
+                converted = None
+            if converted and isinstance(converted[0], VplCorrelation):
+                # A correlation over a correlation reads the stream of its alerts.
+                inner = converted[0]
+                if not inner.sequence:
+                    raise SigmaFeatureNotSupportedByBackendError(
+                        f"correlation '{rule.title}' refers to '{inner.title}', which is not a "
+                        "temporal_ordered sequence: the alerts of a windowed correlation leave "
+                        "their window when a later event reaches it, too late to be placed in "
+                        "the window of another correlation"
+                    )
+                converted = [
+                    VplRule(
+                        name=inner.name,
+                        title=inner.title,
+                        rule_id=inner.rule_id,
+                        level=inner.level,
+                        event_types=[],
+                        where="",
+                        fields=[],
+                        mitre=[],
+                        output=False,
+                        correlation=True,
+                    )
+                ]
             if not converted or not isinstance(converted[0], VplRule):
                 raise SigmaFeatureNotSupportedByBackendError(
                     f"correlation '{rule.title}' refers to a rule that did not convert"
@@ -532,6 +608,13 @@ class VarpulisBackend(TextQueryBackend):
                 if key.reference == ref.reference:
                     return self.escape_and_quote_field(name)
         return self.escape_and_quote_field(group_field)
+
+    def _group_field(self, rule: SigmaCorrelationRule, group_field: str, referenced: VplRule, ref) -> str:
+        """A group-by field as a referenced rule's events carry it; the alerts
+        of a correlation carry it under its key."""
+        if referenced.correlation:
+            return vpl_key(group_field)
+        return self._field_in(rule, group_field, referenced, ref)
 
     def _meta(self, rule: SigmaCorrelationRule | VplRule) -> list[str]:
         if isinstance(rule, VplRule):
@@ -569,7 +652,7 @@ class VarpulisBackend(TextQueryBackend):
         lines = [f"stream {name} = {first.name} as {aliases[0]}"]
         for (ref, step), alias in zip(order[1:], aliases[1:]):
             conds = [
-                f"{self._field_in(rule, g, step, ref)} == {aliases[0]}.{self._field_in(rule, g, first, first_ref)}"
+                f"{self._group_field(rule, g, step, ref)} == {aliases[0]}.{self._group_field(rule, g, first, first_ref)}"
                 for g in group
             ]
             where = f" where {' and '.join(conds)}" if conds else ""
@@ -578,12 +661,12 @@ class VarpulisBackend(TextQueryBackend):
         # partition_by is a speed-up when the group key has the same name in
         # every rule; the equality in each step is what makes it correct.
         if group:
-            names = {self._field_in(rule, group[0], r, ref) for ref, r in order}
+            names = {self._group_field(rule, group[0], r, ref) for ref, r in order}
             if len(names) == 1:
                 lines.append(f"    .partition_by({names.pop()})")
         emit = self._meta(rule)
         for g in group:
-            emit.append(f"{vpl_key(g)}: {aliases[0]}.{self._field_in(rule, g, first, first_ref)}")
+            emit.append(f"{vpl_key(g)}: {aliases[0]}.{self._group_field(rule, g, first, first_ref)}")
         for (ref, step), alias in zip(order, aliases):
             wanted = context_fields(step.event_types) + step.fields
             for f in list(dict.fromkeys(wanted))[:8]:
@@ -592,7 +675,7 @@ class VarpulisBackend(TextQueryBackend):
         return "\n".join(lines)
 
     def _aggregate(self, rule: SigmaCorrelationRule, name: str, source: VplRule, measure: str) -> str:
-        group = [self._field_in(rule, g, source, rule.rules[0]) for g in (rule.group_by or [])]
+        group = [self._group_field(rule, g, source, rule.rules[0]) for g in (rule.group_by or [])]
         keys = [vpl_key(g) for g in (rule.group_by or [])]
         cond = rule.condition
         if cond is None or getattr(cond, "op", None) is None:
@@ -620,6 +703,47 @@ class VarpulisBackend(TextQueryBackend):
         lines.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
         return "\n".join(lines)
 
+    def _temporal(self, rule: SigmaCorrelationRule, name: str, pairs: list[tuple[Any, VplRule]]) -> tuple[list[str], str]:
+        """Every rule seen, in any order, within the timespan, over more than
+        three rules: each rule's events marked with the rule, merged, and the
+        distinct rules counted per group in windows of the timespan (as the
+        Splunk and Elasticsearch backends bucket time). Returns the marking
+        streams and the correlation."""
+        cond = rule.condition
+        if getattr(cond, "op", None) is None or getattr(cond, "count", None) is None:
+            raise SigmaFeatureNotSupportedByBackendError(
+                f"correlation '{rule.title}': a temporal condition other than a count of rules is not supported"
+            )
+        op = {
+            SigmaCorrelationConditionOperator.LT: "<",
+            SigmaCorrelationConditionOperator.LTE: "<=",
+            SigmaCorrelationConditionOperator.GT: ">",
+            SigmaCorrelationConditionOperator.GTE: ">=",
+            SigmaCorrelationConditionOperator.EQ: "==",
+            SigmaCorrelationConditionOperator.NEQ: "!=",
+        }[cond.op]
+        group = list(rule.group_by or [])
+        keys = [vpl_key(g) for g in group]
+        feeders, members = [], []
+        for ref, step in pairs:
+            member = self._unique_name(f"{name}_{step.name}")
+            marks = [f"sigma_rule: {vpl_str(step.name)}"] + [
+                f"{k}: {self._group_field(rule, g, step, ref)}" for g, k in zip(group, keys)
+            ]
+            feeders.append(f"stream {member} = {step.name}\n    .select({', '.join(marks)})")
+            members.append(member)
+        lines = [f"stream {name} = merge({', '.join(members)})"]
+        if len(keys) == 1:
+            lines.append(f"    .partition_by({keys[0]})")
+        elif len(keys) > 1:
+            lines.append("    .partition_by(" + " + '|' + ".join(f"to_string({k})" for k in keys) + ")")
+        lines.append(f"    .window({self._within(rule)})")
+        lines.append("    .aggregate(" + ", ".join([f"{k}: last({k})" for k in keys] + ["rules: count_distinct(sigma_rule)"]) + ")")
+        lines.append(f"    .where(rules {op} {cond.count})")
+        emit = self._meta(rule) + [f"{k}: {k}" for k in keys] + ["rules: rules"]
+        lines.append("    .emit(\n        " + ",\n        ".join(emit) + "\n    )")
+        return feeders, "\n".join(lines)
+
     def convert_correlation_rule(
         self,
         rule: SigmaCorrelationRule,
@@ -627,6 +751,18 @@ class VarpulisBackend(TextQueryBackend):
         method: str | None = None,
         callback: Any = None,
     ) -> list[VplCorrelation]:
+        try:
+            result = self._convert_correlation(rule, method)
+        except SigmaError as e:
+            if self.collect_errors:
+                self.errors.append((rule, e))
+                return []
+            raise
+        # A correlation over this one reads its conversion, as over a rule.
+        rule.set_conversion_result(result)
+        return result
+
+    def _convert_correlation(self, rule: SigmaCorrelationRule, method: str | None) -> list[VplCorrelation]:
         method = method or self.default_correlation_method
         if method not in self.correlation_methods:
             raise SigmaFeatureNotSupportedByBackendError(
@@ -638,16 +774,17 @@ class VarpulisBackend(TextQueryBackend):
         name = self._stream_name(rule)
         kind = rule.type
         streams: list[str] = []
+        feeders: list[str] = []
         if kind == SigmaCorrelationType.TEMPORAL_ORDERED:
             streams.append(self._sequence(rule, name, pairs))
-        elif kind == SigmaCorrelationType.TEMPORAL:
-            if len(pairs) > 3:
-                raise SigmaFeatureNotSupportedByBackendError(
-                    f"correlation '{rule.title}': a temporal correlation over more than three "
-                    "rules would need every order of them; use temporal_ordered"
-                )
+        elif kind == SigmaCorrelationType.TEMPORAL and len(pairs) <= 3:
             for i, order in enumerate(itertools.permutations(pairs)):
                 streams.append(self._sequence(rule, name if i == 0 else f"{name}{i + 1}", list(order)))
+        elif kind == SigmaCorrelationType.TEMPORAL:
+            # Every order of four rules is 24 sequences, of six 720: count
+            # the distinct rules seen in a window instead.
+            feeders, stream = self._temporal(rule, name, pairs)
+            streams.append(stream)
         elif kind == SigmaCorrelationType.EVENT_COUNT:
             streams.append(self._aggregate(rule, name, referenced[0], "count()"))
         elif kind == SigmaCorrelationType.VALUE_COUNT:
@@ -673,6 +810,10 @@ class VarpulisBackend(TextQueryBackend):
                 rules=referenced,
                 streams=streams,
                 output=bool(getattr(rule, "_output", True)),
+                name=name,
+                keys=[vpl_key(g) for g in (rule.group_by or [])],
+                feeders=feeders,
+                sequence=kind == SigmaCorrelationType.TEMPORAL_ORDERED,
             )
         ]
 
@@ -707,7 +848,8 @@ class VarpulisBackend(TextQueryBackend):
             elif isinstance(q, VplCorrelation):
                 correlations.append(q)
                 for r in q.rules:
-                    rules.setdefault(r.name, r)
+                    if not r.correlation:
+                        rules.setdefault(r.name, r)
         event_types = sorted({t for r in rules.values() for t in r.event_types})
 
         out = ["# Converted from Sigma by pySigma-backend-varpulis."]
@@ -726,9 +868,11 @@ class VarpulisBackend(TextQueryBackend):
             head = f"# {corr.title}"
             if corr.rule_id:
                 head += f"\n# sigma {corr.rule_id}" + (f" level {corr.level}" if corr.level else "")
+            if corr.feeders:
+                out.append("\n" + head + "\n" + "\n\n".join(corr.feeders))
             for i, stream in enumerate(corr.streams):
-                text = stream + (f"\n    .to(Bus, topic: {alert_to})" if alert_to else "")
-                out.append("\n" + (head + "\n" if i == 0 else "") + text)
+                text = stream + (f"\n    .to(Bus, topic: {alert_to})" if alert_to and corr.output else "")
+                out.append("\n" + (head + "\n" if i == 0 and not corr.feeders else "") + text)
         return "\n".join(out) + "\n"
 
     def finalize_output_default(self, queries: list[Any]) -> str:

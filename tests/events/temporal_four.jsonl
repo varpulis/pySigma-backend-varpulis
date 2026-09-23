@@ -1,0 +1,8 @@
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:10Z","cs-uri-stem":"/ws","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:00:20Z","cs-uri-stem":"/login","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:01:00Z","cs-uri-stem":"/ssh/write","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:01:30Z","cs-uri-stem":"/ssh/open","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:30:00Z","cs-uri-stem":"/login","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:30:10Z","cs-uri-stem":"/ws","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T10:31:00Z","cs-uri-stem":"/ssh/open","sc-status":200}
+{"type":"ApacheAccess","@timestamp":"2026-01-01T11:00:00Z","cs-uri-stem":"/index.html","sc-status":200}
